@@ -45,6 +45,11 @@ function Wowee-FirstExisting {
 function Find-Sdl2CMakeDir {
     param([string]$RepoRoot, [string]$VcpkgInstalled)
     $candidates = @()
+    # vcpkg first: headers live at include/SDL2/SDL.h, matching this client's includes.
+    if ($VcpkgInstalled) {
+        $candidates += (Join-Path $VcpkgInstalled "share\sdl2")
+        $candidates += (Join-Path $VcpkgInstalled "share\SDL2")
+    }
     if ($env:SDL2_DIR) { $candidates += $env:SDL2_DIR }
     $vendored = Join-Path $RepoRoot "extern\SDL2-$script:Sdl2Version"
     $candidates += $vendored
@@ -52,7 +57,6 @@ function Find-Sdl2CMakeDir {
     Get-ChildItem -Path (Join-Path $RepoRoot "extern") -Directory -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -like "SDL2-*" } |
         ForEach-Object { $candidates += $_.FullName; $candidates += (Join-Path $_.FullName "cmake") }
-    if ($VcpkgInstalled) { $candidates += (Join-Path $VcpkgInstalled "share\sdl2") }
 
     foreach ($c in $candidates) {
         if (-not $c) { continue }
@@ -62,6 +66,17 @@ function Find-Sdl2CMakeDir {
         if (Test-Path (Join-Path $nested "SDL2Config.cmake")) { return (Resolve-Path $nested).Path }
     }
     return $null
+}
+
+function Test-VcpkgRel {
+    param([string]$VcpkgRoot, [string]$RelativePath)
+    if (-not $VcpkgRoot) { return $false }
+    return (Test-Path (Join-Path $VcpkgRoot "installed\x64-windows\$RelativePath"))
+}
+
+function Test-VcpkgSdl2 {
+    param([string]$VcpkgRoot)
+    return (Test-VcpkgRel -VcpkgRoot $VcpkgRoot -RelativePath "include\SDL2\SDL.h")
 }
 
 function Install-Sdl2VcDevel {
@@ -328,7 +343,9 @@ function Install-VcpkgPorts {
     $exe = Join-Path $VcpkgRoot "vcpkg.exe"
     if (-not (Test-Path $exe)) { throw "vcpkg.exe not found at $exe" }
     Write-Host "vcpkg install $($Ports -join ' ') --triplet x64-windows ..."
-    Wowee-InvokeLogged { & $exe install @Ports --triplet x64-windows }
+    # Quote ports so sdl2[vulkan] is not treated as a PowerShell wildcard.
+    $portArgs = @($Ports | ForEach-Object { "$_" })
+    Wowee-InvokeLogged { & $exe install --triplet x64-windows @portArgs }
     if ($LASTEXITCODE -ne 0) { throw "vcpkg install failed for: $($Ports -join ', ')" }
 }
 
@@ -364,12 +381,45 @@ function Ensure-WindowsDeps {
         return [pscustomobject]$result
     }
 
-    $vcpkgRoot = Get-VcpkgRoot -RepoRoot $RepoRoot
+    Write-Host "Preferring vcpkg for SDL2, OpenSSL, zlib, GLM, FFmpeg, and Vulkan."
+    $sdl2FromVcpkg = $false
+    $opensslFromVcpkg = $false
+    $zlibFromVcpkg = $false
+    $glmFromVcpkg = $false
+    $ffmpegFromVcpkg = $false
+    $vulkanFromVcpkg = $false
+
+    try {
+        $vcpkgRoot = Ensure-Vcpkg -RepoRoot $RepoRoot
+        $needed = [System.Collections.Generic.List[string]]::new()
+        if (-not (Test-VcpkgSdl2 -VcpkgRoot $vcpkgRoot)) { $needed.Add("sdl2[vulkan]") }
+        if (-not (Test-VcpkgRel -VcpkgRoot $vcpkgRoot -RelativePath "include\openssl\ssl.h")) { $needed.Add("openssl") }
+        if (-not (Test-VcpkgRel -VcpkgRoot $vcpkgRoot -RelativePath "include\zlib.h")) { $needed.Add("zlib") }
+        if (-not (Test-VcpkgRel -VcpkgRoot $vcpkgRoot -RelativePath "include\glm\glm.hpp")) { $needed.Add("glm") }
+        if (-not (Test-VcpkgRel -VcpkgRoot $vcpkgRoot -RelativePath "include\libavformat\avformat.h")) { $needed.Add("ffmpeg") }
+        if (-not (Test-VcpkgRel -VcpkgRoot $vcpkgRoot -RelativePath "include\vulkan\vulkan.h")) { $needed.Add("vulkan-headers") }
+        if (-not (Test-VcpkgRel -VcpkgRoot $vcpkgRoot -RelativePath "lib\vulkan-1.lib")) { $needed.Add("vulkan-loader") }
+        if ($needed.Count -gt 0) {
+            Write-Host "vcpkg will install: $($needed -join ', ')"
+            Install-VcpkgPorts -VcpkgRoot $vcpkgRoot -Ports ($needed | Select-Object -Unique)
+        }
+    } catch {
+        Write-Warning "vcpkg bootstrap/install failed: $($_.Exception.Message)"
+    }
+
     $installed = $null
     if ($vcpkgRoot) {
-        $installed = Join-Path $vcpkgRoot "installed\x64-windows"
-        if (-not (Test-Path $installed)) { $installed = $null }
+        $candidate = Join-Path $vcpkgRoot "installed\x64-windows"
+        if (Test-Path $candidate) { $installed = $candidate }
     }
+
+    $sdl2FromVcpkg = Test-VcpkgSdl2 -VcpkgRoot $vcpkgRoot
+    $opensslFromVcpkg = Test-VcpkgRel -VcpkgRoot $vcpkgRoot -RelativePath "include\openssl\ssl.h"
+    $zlibFromVcpkg = Test-VcpkgRel -VcpkgRoot $vcpkgRoot -RelativePath "include\zlib.h"
+    $glmFromVcpkg = Test-VcpkgRel -VcpkgRoot $vcpkgRoot -RelativePath "include\glm\glm.hpp"
+    $ffmpegFromVcpkg = Test-VcpkgRel -VcpkgRoot $vcpkgRoot -RelativePath "include\libavformat\avformat.h"
+    $vulkanFromVcpkg = (Test-VcpkgRel -VcpkgRoot $vcpkgRoot -RelativePath "include\vulkan\vulkan.h") -and
+                       (Test-VcpkgRel -VcpkgRoot $vcpkgRoot -RelativePath "lib\vulkan-1.lib")
 
     $sdl2 = Find-Sdl2CMakeDir -RepoRoot $RepoRoot -VcpkgInstalled $installed
     $openssl = Find-OpenSslRoot -RepoRoot $RepoRoot -VcpkgInstalled $installed
@@ -378,72 +428,65 @@ function Ensure-WindowsDeps {
     $ffmpeg = Find-FfmpegRoot -RepoRoot $RepoRoot -VcpkgInstalled $installed
     $vulkan = Find-VulkanSdk -VcpkgInstalled $installed
 
-    $vcpkgPorts = [System.Collections.Generic.List[string]]::new()
-
-    if ($sdl2) {
+    if ($sdl2FromVcpkg) {
+        Write-Host "Using vcpkg SDL2"
+    } elseif ($sdl2) {
         Write-Host "Using existing SDL2 at $sdl2"
     } else {
-        Write-Host "SDL2 not found."
-        try {
-            $sdl2 = Install-Sdl2VcDevel -RepoRoot $RepoRoot
-            Write-Host "Installed SDL2 to $sdl2"
-        } catch {
-            Write-Warning $_.Exception.Message
-            $vcpkgPorts.Add("sdl2")
-        }
+        Write-Host "SDL2 not found; downloading the official SDL2 VC devel package ..."
+        $sdl2 = Install-Sdl2VcDevel -RepoRoot $RepoRoot
+        Write-Host "Installed SDL2 to $sdl2"
     }
 
-    if ($glm) {
+    if ($glmFromVcpkg) {
+        Write-Host "Using vcpkg GLM"
+    } elseif ($glm) {
         Write-Host "Using existing GLM at $glm"
     } else {
         Write-Host "GLM not found; downloading $script:GlmVersion ..."
         $glm = Install-Glm -RepoRoot $RepoRoot
     }
 
-    if ($ffmpeg) {
+    if ($ffmpegFromVcpkg) {
+        Write-Host "Using vcpkg FFmpeg"
+    } elseif ($ffmpeg) {
         Write-Host "Using existing FFmpeg at $ffmpeg"
     } else {
         Write-Host "FFmpeg not found; downloading a Windows shared build ..."
         $ffmpeg = Install-Ffmpeg -RepoRoot $RepoRoot
     }
 
-    if ($zlib) {
+    if ($zlibFromVcpkg) {
+        Write-Host "Using vcpkg zlib"
+    } elseif ($zlib) {
         Write-Host "Using existing zlib at $zlib"
     } else {
         Write-Host "zlib not found; downloading and building $script:ZlibVersion ..."
         $zlib = Install-Zlib -RepoRoot $RepoRoot
     }
 
-    if ($openssl) {
+    if ($opensslFromVcpkg) {
+        Write-Host "Using vcpkg OpenSSL"
+    } elseif ($openssl) {
         Write-Host "Using existing OpenSSL at $openssl"
     } else {
-        Write-Host "OpenSSL not found; installing a Windows prebuilt package (not vcpkg) ..."
+        Write-Host "OpenSSL not found; installing a Windows prebuilt package ..."
         $openssl = Install-OpenSsl -RepoRoot $RepoRoot
         Write-Host "Installed OpenSSL to $openssl"
     }
 
-    if ($vulkan) {
+    if ($vulkanFromVcpkg) {
+        Write-Host "Using vcpkg Vulkan headers/loader"
+        $vulkan = $installed
+    } elseif ($vulkan) {
         Write-Host "Using existing Vulkan at $vulkan"
     } else {
         $vulkan = Install-VulkanViaWinget
         if ($vulkan) {
             Write-Host "Using Vulkan SDK at $vulkan"
         } else {
-            Write-Host "Vulkan SDK not found; will install vulkan-headers and vulkan-loader via vcpkg."
-            $vcpkgPorts.Add("vulkan-headers")
-            $vcpkgPorts.Add("vulkan-loader")
+            Write-Warning "Vulkan not found. Install the Vulkan SDK or vcpkg vulkan-headers + vulkan-loader."
         }
-    }
-
-    if ($vcpkgPorts.Count -gt 0) {
-        $vcpkgRoot = Ensure-Vcpkg -RepoRoot $RepoRoot
-        Install-VcpkgPorts -VcpkgRoot $vcpkgRoot -Ports ($vcpkgPorts | Select-Object -Unique)
-        $installed = Join-Path $vcpkgRoot "installed\x64-windows"
-        if (-not $openssl) { $openssl = Find-OpenSslRoot -RepoRoot $RepoRoot -VcpkgInstalled $installed }
-        if (-not $sdl2) { $sdl2 = Find-Sdl2CMakeDir -RepoRoot $RepoRoot -VcpkgInstalled $installed }
-        if (-not $vulkan) { $vulkan = Find-VulkanSdk -VcpkgInstalled $installed }
-        if (-not $zlib) { $zlib = Find-ZlibPrefix -RepoRoot $RepoRoot -VcpkgInstalled $installed }
-        if (-not $glm) { $glm = Find-GlmDir -RepoRoot $RepoRoot -VcpkgInstalled $installed }
     }
 
     if ($vcpkgRoot -and (Test-Path (Join-Path $vcpkgRoot "scripts\buildsystems\vcpkg.cmake"))) {
@@ -457,37 +500,39 @@ function Ensure-WindowsDeps {
 
     if ($sdl2) {
         $result.Sdl2CMakeDir = $sdl2
-        $result.CMakeArgs.Add("-DSDL2_DIR=$sdl2")
+        if (-not $sdl2FromVcpkg) {
+            $result.CMakeArgs.Add("-DSDL2_DIR=$sdl2")
+        }
         $sdlRoot = Split-Path $sdl2 -Parent
         foreach ($binGuess in @((Join-Path $sdlRoot "lib\x64"), (Join-Path $sdlRoot "bin"))) {
             if (Test-Path $binGuess) { $result.RuntimeBinDirs.Add($binGuess) }
         }
     }
-    if ($openssl) {
+    if ($openssl -and -not $opensslFromVcpkg) {
         $result.CMakeArgs.Add("-DOPENSSL_ROOT_DIR=$openssl")
         $result.PrefixPaths.Add($openssl)
         foreach ($binGuess in @((Join-Path $openssl "bin"), (Join-Path $openssl "lib"))) {
             if (Test-Path $binGuess) { $result.RuntimeBinDirs.Add($binGuess) }
         }
     }
-    if ($zlib) {
+    if ($zlib -and -not $zlibFromVcpkg) {
         $result.PrefixPaths.Add($zlib)
         $zbin = Join-Path $zlib "bin"
         if (Test-Path $zbin) { $result.RuntimeBinDirs.Add($zbin) }
     }
-    if ($glm) {
+    if ($glm -and -not $glmFromVcpkg) {
         $glmConfig = Join-Path $glm "cmake\glm"
         if (Test-Path (Join-Path $glmConfig "glmConfig.cmake")) {
             $result.CMakeArgs.Add("-Dglm_DIR=$glmConfig")
         }
         $result.PrefixPaths.Add($glm)
     }
-    if ($ffmpeg) {
+    if ($ffmpeg -and -not $ffmpegFromVcpkg) {
         $result.PrefixPaths.Add($ffmpeg)
         $ffbin = Join-Path $ffmpeg "bin"
         if (Test-Path $ffbin) { $result.RuntimeBinDirs.Add($ffbin) }
     }
-    if ($vulkan) {
+    if ($vulkan -and -not $vulkanFromVcpkg) {
         $env:VULKAN_SDK = $vulkan
         $result.CMakeArgs.Add("-DVULKAN_SDK=$vulkan")
         $vkInc = Join-Path $vulkan "Include"
@@ -499,6 +544,15 @@ function Ensure-WindowsDeps {
         $vkBin = Join-Path $vulkan "Bin"
         if (-not (Test-Path $vkBin)) { $vkBin = Join-Path $vulkan "bin" }
         if (Test-Path $vkBin) { $result.RuntimeBinDirs.Add($vkBin) }
+    } elseif ($vulkanFromVcpkg -and $installed) {
+        $vkInc = Join-Path $installed "include"
+        $vkLib = Join-Path $installed "lib\vulkan-1.lib"
+        if (Test-Path (Join-Path $vkInc "vulkan\vulkan.h")) {
+            $result.CMakeArgs.Add("-DVulkan_INCLUDE_DIR=$vkInc")
+        }
+        if (Test-Path $vkLib) {
+            $result.CMakeArgs.Add("-DVulkan_LIBRARY=$vkLib")
+        }
     }
 
     if ($result.PrefixPaths.Count -gt 0) {

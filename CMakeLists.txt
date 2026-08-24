@@ -316,6 +316,47 @@ if(ANDROID)
                                 COMPILE_OPTIONS "-Wno-unused-parameter")
 else()
     find_package(SDL2 REQUIRED)
+    # Linux/macOS packages install <SDL2/SDL.h>. The official Windows VC zip and
+    # SDL's own CMake target expose include/SDL.h, so the same include spelling
+    # needs a directory named SDL2 in front of that include tree.
+    if(WIN32)
+        set(_wowee_sdl2_hdr_dir "")
+        foreach(_cand IN LISTS SDL2_INCLUDE_DIRS SDL2_INCLUDE_DIR)
+            if(_cand AND EXISTS "${_cand}/SDL2/SDL.h")
+                set(_wowee_sdl2_hdr_dir "")
+                break()
+            endif()
+            if(_cand AND EXISTS "${_cand}/SDL.h")
+                set(_wowee_sdl2_hdr_dir "${_cand}")
+                break()
+            endif()
+        endforeach()
+        if(NOT _wowee_sdl2_hdr_dir AND TARGET SDL2::SDL2)
+            get_target_property(_wowee_sdl2_incs SDL2::SDL2 INTERFACE_INCLUDE_DIRECTORIES)
+            foreach(_d IN LISTS _wowee_sdl2_incs)
+                if(_d AND EXISTS "${_d}/SDL2/SDL.h")
+                    set(_wowee_sdl2_hdr_dir "")
+                    break()
+                endif()
+                if(_d AND EXISTS "${_d}/SDL.h")
+                    set(_wowee_sdl2_hdr_dir "${_d}")
+                    break()
+                endif()
+            endforeach()
+        endif()
+        if(_wowee_sdl2_hdr_dir)
+            get_filename_component(_wowee_sdl2_hdr_dir "${_wowee_sdl2_hdr_dir}" ABSOLUTE)
+            set(WOWEE_SDL2_COMPAT_INC ${CMAKE_BINARY_DIR}/sdl2-compat-include)
+            file(MAKE_DIRECTORY ${WOWEE_SDL2_COMPAT_INC}/SDL2)
+            # Junctions/symlinks need extra Windows privileges; copy the headers
+            # so <SDL2/SDL.h> resolves regardless.
+            file(COPY "${_wowee_sdl2_hdr_dir}/"
+                 DESTINATION "${WOWEE_SDL2_COMPAT_INC}/SDL2"
+                 FILES_MATCHING PATTERN "*.h")
+            include_directories(${WOWEE_SDL2_COMPAT_INC})
+            message(STATUS "SDL2 Windows header compat: ${WOWEE_SDL2_COMPAT_INC}/SDL2 <- ${_wowee_sdl2_hdr_dir}")
+        endif()
+    endif()
 endif()
 find_package(Vulkan QUIET)
 if(NOT Vulkan_FOUND)
@@ -569,6 +610,9 @@ if(EXISTS ${IMGUI_DIR})
         ${IMGUI_DIR}
         ${IMGUI_DIR}/backends
     )
+    if(WOWEE_SDL2_COMPAT_INC)
+        target_include_directories(imgui PUBLIC ${WOWEE_SDL2_COMPAT_INC})
+    endif()
     target_link_libraries(imgui PUBLIC SDL2::SDL2 Vulkan::Vulkan ${CMAKE_DL_LIBS})
 else()
     message(WARNING "ImGui not found in extern/imgui. Clone it with:")
@@ -1275,6 +1319,9 @@ target_include_directories(wowee PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_BINARY_DIR}/generated
 )
+if(WOWEE_SDL2_COMPAT_INC)
+    target_include_directories(wowee PRIVATE ${WOWEE_SDL2_COMPAT_INC})
+endif()
 
 # Precompiled header.
 #
@@ -2262,6 +2309,9 @@ target_include_directories(wowee_editor PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/tools/editor
 )
+if(WOWEE_SDL2_COMPAT_INC)
+    target_include_directories(wowee_editor PRIVATE ${WOWEE_SDL2_COMPAT_INC})
+endif()
 target_include_directories(wowee_editor SYSTEM PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/extern
     ${CMAKE_CURRENT_SOURCE_DIR}/extern/vk-bootstrap/src
