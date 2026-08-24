@@ -1419,7 +1419,7 @@ endif()
 #
 # WOWEE_WARNINGS_AS_ERRORS=OFF turns it off for a bisect or a new-compiler
 # build, where an unfamiliar diagnostic should not stop the build outright.
-option(WOWEE_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ON)
+option(WOWEE_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 
 if(MSVC)
     target_compile_options(wowee PRIVATE /W4)

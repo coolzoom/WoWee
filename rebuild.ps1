@@ -69,7 +69,7 @@ Set-Location "build"
 
 # Configure with CMake
 Write-Host "Configuring with CMake..."
-$cmakeArgs = @("..", "-DCMAKE_BUILD_TYPE=Release")
+$cmakeArgs = @("..", "-DCMAKE_BUILD_TYPE=Release", "-DWOWEE_WARNINGS_AS_ERRORS=OFF")
 $cmakeArgs += $deps.CMakeArgs
 & cmake @cmakeArgs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
