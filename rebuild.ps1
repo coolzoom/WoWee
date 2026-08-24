@@ -3,9 +3,13 @@
     Clean rebuilds the wowee project (Windows equivalent of rebuild.sh).
 
 .DESCRIPTION
-    Removes the build directory, reconfigures from scratch, rebuilds, and
-    creates a directory junction for the Data folder.
+    Default toolchain is MSYS2 MinGW GCC. Pass 'vs' for a Visual Studio tree.
 #>
+
+param(
+    [Parameter(Position = 0)]
+    [string]$Toolchain
+)
 
 $ErrorActionPreference = "Stop"
 
@@ -50,48 +54,83 @@ function Ensure-FidelityFxSdk {
     }
 }
 
+. (Join-Path $ScriptDir "scripts\Ensure-Mingw.ps1")
 . (Join-Path $ScriptDir "scripts\Ensure-WindowsDeps.ps1")
 
-Write-Host "Clean rebuilding wowee..."
+$Toolchain = Resolve-WoweeToolchain -Name $Toolchain
+Write-Host "Clean rebuilding wowee (toolchain: $Toolchain)..."
 Ensure-Fsr2Sdk
 Ensure-FidelityFxSdk
-$deps = Ensure-WindowsDeps -RepoRoot $ScriptDir
 
-# Remove build directory completely
-if (Test-Path "build") {
-    Write-Host "Removing old build directory..."
-    Remove-Item -Recurse -Force "build"
+$cmakeExe = "cmake"
+$buildDir = "build"
+$cmakeArgs = [System.Collections.Generic.List[string]]::new()
+$buildExtra = @()
+
+if ($Toolchain -eq "mingw") {
+    $mingw = Ensure-MingwEnvironment
+    $deps = Ensure-WindowsDeps -RepoRoot $ScriptDir
+    $cmakeExe = $mingw.Cmake
+    $cmakeArgs.Add("-G")
+    $cmakeArgs.Add("Ninja")
+    $cmakeArgs.Add("-DCMAKE_BUILD_TYPE=Release")
+    $cmakeArgs.Add("-DWOWEE_WARNINGS_AS_ERRORS=OFF")
+    $cmakeArgs.Add("-DCMAKE_C_COMPILER=$($mingw.Gcc)")
+    $cmakeArgs.Add("-DCMAKE_CXX_COMPILER=$($mingw.Gxx)")
+    $cmakeArgs.Add("-DCMAKE_MAKE_PROGRAM=$($mingw.Ninja)")
+    $prefixFwd = ($mingw.Prefix -replace '\\', '/')
+    $cmakeArgs.Add("-DCMAKE_PREFIX_PATH=$prefixFwd")
+    foreach ($a in $deps.CMakeArgs) { $cmakeArgs.Add($a) }
+} else {
+    $deps = Ensure-WindowsDeps -RepoRoot $ScriptDir
+    $buildDir = "build-vs"
+    $cmakeArgs.Add("-G")
+    $cmakeArgs.Add("Visual Studio 17 2022")
+    $cmakeArgs.Add("-A")
+    $cmakeArgs.Add("x64")
+    $cmakeArgs.Add("-DWOWEE_WARNINGS_AS_ERRORS=OFF")
+    foreach ($a in $deps.CMakeArgs) { $cmakeArgs.Add($a) }
+    $buildExtra = @("--config", "RelWithDebInfo")
 }
 
-# Create fresh build directory
-New-Item -ItemType Directory -Path "build" | Out-Null
-Set-Location "build"
+if (Test-Path $buildDir) {
+    Write-Host "Removing old $buildDir directory..."
+    Remove-Item -Recurse -Force $buildDir
+}
+New-Item -ItemType Directory -Path $buildDir | Out-Null
+Set-Location $buildDir
 
-# Configure with CMake
 Write-Host "Configuring with CMake..."
-$cmakeArgs = @("..", "-DCMAKE_BUILD_TYPE=Release", "-DWOWEE_WARNINGS_AS_ERRORS=OFF")
-$cmakeArgs += $deps.CMakeArgs
-& cmake @cmakeArgs
+$configure = @("..") + $cmakeArgs
+& $cmakeExe @configure
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-# Build with all cores
 $numProcs = $env:NUMBER_OF_PROCESSORS
 if (-not $numProcs) { $numProcs = 4 }
 Write-Host "Building with $numProcs cores..."
-& cmake --build . --parallel $numProcs
+& $cmakeExe --build . --parallel $numProcs @buildExtra
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-Copy-WoweeRuntimeDlls -SourceBinDirs @($deps.RuntimeBinDirs) -DestBinDir (Join-Path (Get-Location) "bin")
+$binDir = Join-Path (Get-Location) "bin"
+if ($Toolchain -eq "vs") {
+    $cfgBin = Join-Path $binDir "RelWithDebInfo"
+    if (Test-Path $cfgBin) { $binDir = $cfgBin }
+}
+Copy-WoweeRuntimeDlls -SourceBinDirs @($deps.RuntimeBinDirs) -DestBinDir $binDir
 
-# Create Data junction in bin directory
 Write-Host "Creating Data junction..."
-$binData = Join-Path (Get-Location) "bin\Data"
+$binData = Join-Path $binDir "Data"
 if (-not (Test-Path $binData)) {
-    $target = (Resolve-Path (Join-Path (Get-Location) "..\Data")).Path
+    $target = (Resolve-Path (Join-Path $ScriptDir "Data")).Path
     cmd /c mklink /J "$binData" "$target"
     Write-Host "  Created Data junction -> $target"
 }
 
+$exeHint = Join-Path $binDir "wowee.exe"
 Write-Host ""
-Write-Host "Clean build complete! Binary: build\bin\wowee.exe"
-Write-Host "Run with: cd build\bin && .\wowee.exe"
+Write-Host "Clean build complete! Binary: $exeHint"
+if ($Toolchain -eq "vs") {
+    Write-Host "Open $buildDir in Visual Studio to debug (RelWithDebInfo)."
+} else {
+    Write-Host "Run with: & '$exeHint'"
+}

@@ -3,9 +3,14 @@
     Builds the wowee project (Windows equivalent of build.sh).
 
 .DESCRIPTION
-    Creates a build directory, runs CMake configure + build, and creates a
-    directory junction for the Data folder so the binary can find assets.
+    Default toolchain is MSYS2 MinGW GCC. Pass 'vs' to generate a Visual Studio
+    solution (convenient for debugging).
 #>
+
+param(
+    [Parameter(Position = 0)]
+    [string]$Toolchain
+)
 
 $ErrorActionPreference = "Stop"
 
@@ -50,42 +55,84 @@ function Ensure-FidelityFxSdk {
     }
 }
 
+. (Join-Path $ScriptDir "scripts\Ensure-Mingw.ps1")
 . (Join-Path $ScriptDir "scripts\Ensure-WindowsDeps.ps1")
 
-Write-Host "Building wowee..."
+$Toolchain = Resolve-WoweeToolchain -Name $Toolchain
+Write-Host "Building wowee (toolchain: $Toolchain)..."
 Ensure-Fsr2Sdk
 Ensure-FidelityFxSdk
-$deps = Ensure-WindowsDeps -RepoRoot $ScriptDir
 
-# Create build directory if it doesn't exist
-if (-not (Test-Path "build")) {
-    New-Item -ItemType Directory -Path "build" | Out-Null
+$cmakeExe = "cmake"
+$buildDir = "build"
+$cmakeArgs = [System.Collections.Generic.List[string]]::new()
+$buildExtra = @()
+$binDirName = "bin"
+
+if ($Toolchain -eq "mingw") {
+    $mingw = Ensure-MingwEnvironment
+    $deps = Ensure-WindowsDeps -RepoRoot $ScriptDir
+    $cmakeExe = $mingw.Cmake
+    $cmakeArgs.Add("-G")
+    $cmakeArgs.Add("Ninja")
+    $cmakeArgs.Add("-DCMAKE_BUILD_TYPE=Release")
+    $cmakeArgs.Add("-DWOWEE_WARNINGS_AS_ERRORS=OFF")
+    $cmakeArgs.Add("-DCMAKE_C_COMPILER=$($mingw.Gcc)")
+    $cmakeArgs.Add("-DCMAKE_CXX_COMPILER=$($mingw.Gxx)")
+    $cmakeArgs.Add("-DCMAKE_MAKE_PROGRAM=$($mingw.Ninja)")
+    $prefixFwd = ($mingw.Prefix -replace '\\', '/')
+    $cmakeArgs.Add("-DCMAKE_PREFIX_PATH=$prefixFwd")
+    foreach ($a in $deps.CMakeArgs) { $cmakeArgs.Add($a) }
+} else {
+    $deps = Ensure-WindowsDeps -RepoRoot $ScriptDir
+    $buildDir = "build-vs"
+    $cmakeArgs.Add("-G")
+    $cmakeArgs.Add("Visual Studio 17 2022")
+    $cmakeArgs.Add("-A")
+    $cmakeArgs.Add("x64")
+    $cmakeArgs.Add("-DWOWEE_WARNINGS_AS_ERRORS=OFF")
+    foreach ($a in $deps.CMakeArgs) { $cmakeArgs.Add($a) }
+    $buildExtra = @("--config", "RelWithDebInfo")
 }
-Set-Location "build"
 
-# Configure with CMake
+if (-not (Test-Path $buildDir)) {
+    New-Item -ItemType Directory -Path $buildDir | Out-Null
+}
+Reset-CMakeCacheIfGeneratorMismatch -BuildDir (Join-Path $ScriptDir $buildDir) -WantGenerator $(if ($Toolchain -eq "mingw") { "Ninja" } else { "Visual Studio 17 2022" })
+Set-Location $buildDir
+
 Write-Host "Configuring with CMake..."
-$cmakeArgs = @("..", "-DCMAKE_BUILD_TYPE=Release", "-DWOWEE_WARNINGS_AS_ERRORS=OFF")
-$cmakeArgs += $deps.CMakeArgs
-& cmake @cmakeArgs
+$configure = @("..") + $cmakeArgs
+& $cmakeExe @configure
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-# Build with all cores
 $numProcs = $env:NUMBER_OF_PROCESSORS
 if (-not $numProcs) { $numProcs = 4 }
 Write-Host "Building with $numProcs cores..."
-& cmake --build . --parallel $numProcs
+& $cmakeExe --build . --parallel $numProcs @buildExtra
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-Copy-WoweeRuntimeDlls -SourceBinDirs @($deps.RuntimeBinDirs) -DestBinDir (Join-Path (Get-Location) "bin")
+$binDir = Join-Path (Get-Location) "bin"
+if ($Toolchain -eq "vs") {
+    $cfgBin = Join-Path $binDir "RelWithDebInfo"
+    if (Test-Path $cfgBin) { $binDir = $cfgBin }
+}
+Copy-WoweeRuntimeDlls -SourceBinDirs @($deps.RuntimeBinDirs) -DestBinDir $binDir
 
-# Ensure Data junction exists in bin directory
-$binData = Join-Path (Get-Location) "bin\Data"
+$binData = Join-Path $binDir "Data"
 if (-not (Test-Path $binData)) {
-    $target = (Resolve-Path (Join-Path (Get-Location) "..\Data")).Path
+    $target = (Resolve-Path (Join-Path $ScriptDir "Data")).Path
     cmd /c mklink /J "$binData" "$target"
 }
 
+$exeHint = Join-Path $binDir "wowee.exe"
 Write-Host ""
-Write-Host "Build complete! Binary: build\bin\wowee.exe"
-Write-Host "Run with: cd build\bin && .\wowee.exe"
+Write-Host "Build complete! Binary: $exeHint"
+if ($Toolchain -eq "vs") {
+    Write-Host "Open $buildDir in Visual Studio to debug (RelWithDebInfo)."
+    Write-Host "Or: ./build.bat   (default MinGW GCC)"
+} else {
+    Write-Host "Run with: & '$exeHint'"
+    Write-Host "Keep $($mingw.Prefix)\bin on PATH so MinGW DLLs resolve."
+    Write-Host "VS debug build: ./build.bat vs"
+}
