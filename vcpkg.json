@@ -10,6 +10,7 @@
     "glm",
     "zlib",
     "ffmpeg",
-    "vulkan-headers"
+    "vulkan-headers",
+    "vulkan-loader"
   ]
 }

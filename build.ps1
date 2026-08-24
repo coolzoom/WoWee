@@ -50,9 +50,12 @@ function Ensure-FidelityFxSdk {
     }
 }
 
+. (Join-Path $ScriptDir "scripts\Ensure-WindowsDeps.ps1")
+
 Write-Host "Building wowee..."
 Ensure-Fsr2Sdk
 Ensure-FidelityFxSdk
+$deps = Ensure-WindowsDeps -RepoRoot $ScriptDir
 
 # Create build directory if it doesn't exist
 if (-not (Test-Path "build")) {
@@ -62,7 +65,9 @@ Set-Location "build"
 
 # Configure with CMake
 Write-Host "Configuring with CMake..."
-& cmake .. -DCMAKE_BUILD_TYPE=Release
+$cmakeArgs = @("..", "-DCMAKE_BUILD_TYPE=Release")
+$cmakeArgs += $deps.CMakeArgs
+& cmake @cmakeArgs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 # Build with all cores
@@ -71,6 +76,8 @@ if (-not $numProcs) { $numProcs = 4 }
 Write-Host "Building with $numProcs cores..."
 & cmake --build . --parallel $numProcs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+Copy-WoweeRuntimeDlls -SourceBinDirs @($deps.RuntimeBinDirs) -DestBinDir (Join-Path (Get-Location) "bin")
 
 # Ensure Data junction exists in bin directory
 $binData = Join-Path (Get-Location) "bin\Data"
