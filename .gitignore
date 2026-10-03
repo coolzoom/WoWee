@@ -1,5 +1,7 @@
 # Build directories
 build/
+# macos.sh scratch space: build tree, logs and saved settings
+_work/
 build_asan/
 build-asan/
 build-android/
