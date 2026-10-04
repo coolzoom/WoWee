@@ -3,8 +3,46 @@
 #include "game/shapeshift_forms.hpp"
 #include "game/bg_score_defs.hpp"
 #include "addons/lua_api_helpers.hpp"
+#include "pipeline/asset_manager.hpp"
+
+#include <unordered_map>
 
 namespace wowee::addons {
+
+namespace {
+
+// Keyed by the table as well as the id: switching expansion at the login
+// screen loads a different ChrRaces, and its names are the ones to answer.
+const char* localizedChrName(game::GameHandler* gh, const char* dbcName,
+                             uint32_t id, const char* fallback) {
+    static std::unordered_map<const void*, std::unordered_map<uint32_t, std::string>> cache;
+    auto* am = gh ? gh->services().assetManager : nullptr;
+    if (!am || !am->isInitialized()) return fallback;
+    auto dbc = am->loadDBC(dbcName);
+    if (!dbc || !dbc->isLoaded() || dbc->firstLocaleField() < 0) return fallback;
+    auto& names = cache[dbc.get()];
+    auto it = names.find(id);
+    if (it == names.end()) {
+        const int32_t row = dbc->findRecordById(id);
+        std::string name = row < 0 ? std::string()
+            : dbc->getString(static_cast<uint32_t>(row),
+                             static_cast<uint32_t>(dbc->firstLocaleField()));
+        it = names.emplace(id, std::move(name)).first;
+    }
+    return it->second.empty() ? fallback : it->second.c_str();
+}
+
+} // namespace
+
+const char* luaRaceName(game::GameHandler* gh, uint32_t raceId) {
+    const char* english = raceId < std::size(kLuaRaces) ? kLuaRaces[raceId] : "Unknown";
+    return localizedChrName(gh, "ChrRaces.dbc", raceId, english);
+}
+
+const char* luaClassName(game::GameHandler* gh, uint32_t classId) {
+    const char* english = classId < std::size(kLuaClasses) ? kLuaClasses[classId] : "Unknown";
+    return localizedChrName(gh, "ChrClasses.dbc", classId, english);
+}
 
 static int lua_UnitName(lua_State* L) {
     const char* uid = luaL_optstring(L, 1, "player");
@@ -253,7 +291,7 @@ static int lua_UnitClass(lua_State* L) {
         // where "MAGE" was meant looked up nothing: SetPortraitTexture found no
         // CLASS_ICON_TCOORDS entry and fell back to the placeholder portrait,
         // which is the blue question mark on the character sheet.
-        lua_pushstring(L, kLuaClasses[classId]);
+        lua_pushstring(L, luaClassName(gh, classId));
         lua_pushstring(L, token);
         lua_pushnumber(L, classId);
         return 3;
@@ -934,7 +972,7 @@ static int lua_UnitRace(lua_State* L) {
 
     const uint8_t raceId = unitRaceOf(gh, uid);
     const bool known = (raceId > 0 && raceId < 12);
-    const char* name = known ? kLuaRaces[raceId] : "Unknown";
+    const char* name = known ? luaRaceName(gh, raceId) : "Unknown";
     const char* file = known ? kLuaRaceFileNames[raceId] : "Unknown";
     lua_pushstring(L, name);      // 1: localized race
     lua_pushstring(L, file);      // 2: race file name, spliced into asset paths
@@ -2047,14 +2085,18 @@ static int lua_GetRaidRosterInfo(lua_State* L) {
     lua_pushnumber(L, m.level);              // level
     // Class: resolve from entity if available
     std::string className = "Unknown";
+    std::string fileName = "Unknown";
     auto entity = gh->getEntityManager().getEntity(m.guid);
     if (entity) {
         uint32_t bytes0 = entity->getField(game::fieldIndex(game::UF::UNIT_FIELD_BYTES_0));
         uint8_t classId = static_cast<uint8_t>((bytes0 >> 8) & 0xFF);
-        if (classId > 0 && classId < 12) className = kLuaClasses[classId];
+        if (classId > 0 && classId < 12) {
+            className = luaClassName(gh, classId);
+            fileName = kLuaClasses[classId];
+        }
     }
     lua_pushstring(L, className.c_str());    // class (localized)
-    lua_pushstring(L, className.c_str());    // fileName
+    lua_pushstring(L, fileName.c_str());     // fileName
     lua_pushstring(L, "");                   // zone
     lua_pushboolean(L, m.isOnline);          // online
     lua_pushboolean(L, m.curHealth == 0);    // isDead
@@ -2201,16 +2243,18 @@ static int lua_GetPlayerInfoByGUID(lua_State* L) {
     // For player GUID, return class/race if it's the local player
     const char* className = "Unknown";
     const char* raceName = "Unknown";
+    const char* localClass = "Unknown";
+    const char* localRace = "Unknown";
     if (guid == gh->getPlayerGuid()) {
         uint8_t cid = gh->getPlayerClass();
         uint8_t rid = gh->getPlayerRace();
-        if (cid < 12) className = kLuaClasses[cid];
-        if (rid < 12) raceName = kLuaRaces[rid];
+        if (cid < 12) { className = kLuaClasses[cid]; localClass = luaClassName(gh, cid); }
+        if (rid < 12) { raceName = kLuaRaces[rid]; localRace = luaRaceName(gh, rid); }
     }
 
-    lua_pushstring(L, className);  // 1: localizedClass
+    lua_pushstring(L, localClass); // 1: localizedClass
     lua_pushstring(L, className);  // 2: englishClass
-    lua_pushstring(L, raceName);   // 3: localizedRace
+    lua_pushstring(L, localRace);  // 3: localizedRace
     lua_pushstring(L, raceName);   // 4: englishRace
     lua_pushnumber(L, 0);          // 5: sex (0=unknown)
     lua_pushstring(L, name.c_str()); // 6: name

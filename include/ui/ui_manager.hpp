@@ -64,6 +64,9 @@ public:
     /// at a scale of 1. Empty until loadInterfaceFont has found it.
     [[nodiscard]] const std::vector<uint8_t>& clientFontData() const { return clientFontData_; }
     [[nodiscard]] float clientFontSize() const { return clientFontSize_; }
+    /// A face holding the Chinese glyphs FRIZQT and the other Latin faces lack,
+    /// as bytes, merged into every face as a fallback. Empty if none was found.
+    [[nodiscard]] const std::vector<uint8_t>& cjkFallbackData() const { return cjkFallbackData_; }
 
     /**
      * Shutdown ImGui and cleanup
@@ -129,6 +132,9 @@ private:
     float interfaceScale_ = 1.0f;
     std::vector<uint8_t> clientFontData_;
     float clientFontSize_ = 15.0f;
+    // Not owned by the atlas: one buffer serves every face it is merged into,
+    // so it has to outlive them all.
+    std::vector<uint8_t> cjkFallbackData_;
     core::Window* window = nullptr;
     UIServices services_;  // Injected services
 

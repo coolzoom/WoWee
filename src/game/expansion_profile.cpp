@@ -186,6 +186,12 @@ const ExpansionProfile* ExpansionRegistry::getActive() const {
     return getProfile(activeId_);
 }
 
+void ExpansionRegistry::setDataLocale(const std::string& id, const std::string& locale) {
+    for (auto& p : profiles_) {
+        if (p.id == id && !p.localeFromProfile && !locale.empty()) p.locale = locale;
+    }
+}
+
 bool ExpansionRegistry::loadProfile(const std::string& jsonPath, const std::string& dirPath) {
     std::ifstream f(jsonPath);
     if (!f.is_open()) return false;
@@ -236,7 +242,7 @@ bool ExpansionRegistry::loadProfile(const std::string& jsonPath, const std::stri
         v = jsonValue(json, "game"); if (!v.empty()) p.game = v;
         v = jsonValue(json, "platform"); if (!v.empty()) p.platform = v;
         v = jsonValue(json, "os"); if (!v.empty()) p.os = v;
-        v = jsonValue(json, "locale"); if (!v.empty()) p.locale = v;
+        v = jsonValue(json, "locale"); if (!v.empty()) { p.locale = v; p.localeFromProfile = true; }
         p.timezone = static_cast<uint32_t>(jsonInt(json, "timezone", static_cast<int>(p.timezone)));
     }
     p.maxLevel = static_cast<uint32_t>(jsonInt(json, "maxLevel", 60));

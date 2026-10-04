@@ -1519,11 +1519,10 @@ else()
     )
 endif()
 
-# ── Unit tests (Catch2) ──────────────────────────────────────
-if(WOWEE_BUILD_TESTS)
 # Defined here rather than beside the tools that use it: tests/ is added
 # below and a CMake function has to exist before the directory that calls
-# it is processed.
+# it is processed. Outside the WOWEE_BUILD_TESTS block, because the tools
+# call it too and they are built with the tests off.
 # Everything a StormLib consumer has to link besides StormLib itself.
 #
 # A static libstorm leaves its own dependencies to whoever links it: bzip2
@@ -1558,6 +1557,8 @@ function(wowee_link_stormlib target)
     endif()
 endfunction()
 
+# ── Unit tests (Catch2) ──────────────────────────────────────
+if(WOWEE_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()

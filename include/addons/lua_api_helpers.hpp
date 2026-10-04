@@ -228,6 +228,12 @@ inline constexpr const char* kLuaRaces[] = {
     "Tauren","Gnome","Troll","","Blood Elf","Draenei"
 };
 
+/// The race or class name as the client's own data spells it - 人类 and 战士 on
+/// a zhCN client - falling back to the English tables above. The localized
+/// result of UnitRace and UnitClass, which FrameXML prints as it is given.
+const char* luaRaceName(game::GameHandler* gh, uint32_t raceId);
+const char* luaClassName(game::GameHandler* gh, uint32_t classId);
+
 /// Whether a quest of this level is grey to a player of that one.
 ///
 /// The threshold is AzerothCore's Acore::XP::GetGrayLevel, which the server

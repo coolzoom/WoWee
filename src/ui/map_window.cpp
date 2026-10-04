@@ -169,6 +169,20 @@ bool MapWindow::open(SDL_Window* gameWindow, rendering::Renderer* renderer,
         } else {
             io.Fonts->AddFontDefault();
         }
+        // Zone and player names in Chinese, which the face above has no glyphs for.
+        if (ui && !ui->cjkFallbackData().empty()) {
+            const std::vector<uint8_t>& cjk = ui->cjkFallbackData();
+            static const ImWchar kExcludeLatin[] = { 0x0000, 0x024F, 0 };
+            ImFontConfig cfg;
+            cfg.MergeMode = true;
+            cfg.FontDataOwnedByAtlas = false;
+            cfg.RasterizerMultiply = 1.35f;
+            cfg.ExtraSizeScale = fontEmSizeScale(cjk.data(), cjk.size());
+            cfg.GlyphExcludeRanges = kExcludeLatin;
+            io.Fonts->AddFontFromMemoryTTF(const_cast<uint8_t*>(cjk.data()),
+                                           static_cast<int>(cjk.size()),
+                                           ui->clientFontSize(), &cfg);
+        }
 
         ImGui_ImplSDL3_InitForVulkan(window_);
         ImGui_ImplVulkan_InitInfo info{};

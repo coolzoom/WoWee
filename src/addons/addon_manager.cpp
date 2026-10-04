@@ -1305,7 +1305,10 @@ bool AddonManager::loadFrameXml(const std::string& frameXmlDir) {
     luaEngine_.executeString(
         "local function centered(f)\n"
         "  if not f or not UIPanelWindows then return end\n"
-        "  local name = f:GetName()\n"
+        // The missing-API fallback answers a frame this interface lacks
+        // (PVPParentFrame in 1.12) with a stub whose GetName is nil.
+        "  local name = f.GetName and f:GetName()\n"
+        "  if type(name) ~= 'string' then return end\n"
         "  UIPanelWindows[name] = nil\n"
         "  if UISpecialFrames then tinsert(UISpecialFrames, name) end\n"
         "  f:HookScript('OnShow', function(self)\n"

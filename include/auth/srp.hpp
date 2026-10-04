@@ -79,6 +79,10 @@ private:
     std::vector<uint8_t> K;   // Interleaved session key (40 bytes)
     std::vector<uint8_t> M1;  // Client proof (20 bytes)
     std::vector<uint8_t> M2;  // Expected server proof (20 bytes)
+    // The same proof as a mangos-family server computes it when M1 or K ends
+    // in a zero byte: it hashes them as big numbers, which drops the byte.
+    // Empty when neither does.
+    std::vector<uint8_t> M2Trimmed;
 
     // Stored credentials
     std::string stored_username;

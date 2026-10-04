@@ -98,6 +98,22 @@ static int findWorldViewContinentIdx(const std::vector<Zone>& zones,
     return firstContinent;
 }
 
+static std::string localizedMapName(pipeline::AssetManager* am, uint32_t mapId,
+                                    const char* fallback) {
+    if (am && am->isInitialized()) {
+        if (auto dbc = am->loadDBC("Map.dbc"); dbc && dbc->isLoaded()) {
+            for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+                if (dbc->getUInt32(i, 0) == mapId) {
+                    std::string name = dbc->getString(i, 4);
+                    if (!name.empty()) return name;
+                    break;
+                }
+            }
+        }
+    }
+    return fallback ? std::string(fallback) : std::string();
+}
+
 // ── PIMPL Implementation ─────────────────────────────────────
 
 struct WorldMapFacade::Impl {
@@ -1108,7 +1124,8 @@ void WorldMapFacade::Impl::renderImGuiOverlay(const glm::vec3& playerRenderPos,
             int curIdx = viewState.currentZoneIdx();
             if (curIdx >= 0 && curIdx < static_cast<int>(data.zones().size())) {
                 std::string title = data.zones()[curIdx].areaName;
-                if (title == "Azeroth") title = mapDisplayName(0);
+                if (title == "Azeroth")
+                    title = localizedMapName(assetManager, 0, mapDisplayName(0));
                 if (!title.empty()) {
                     ImVec2 titleSz = ImGui::CalcTextSize(title.c_str());
                     float tx = imgMin.x + (displayW - titleSz.x) * 0.5f;
@@ -1249,7 +1266,13 @@ void WorldMapFacade::Impl::renderImGuiOverlay(const glm::vec3& playerRenderPos,
                 const bool selected = (ci == viewState.continentIdx());
                 if (selected) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.25f, 0.05f, 0.9f));
                 std::string rawName = data.zones()[ci].areaName.empty() ? "Continent" : data.zones()[ci].areaName;
-                if (rawName == "Azeroth") rawName = mapDisplayName(0);
+                if (const int mapId = folderToMapId(rawName); mapId >= 0) {
+                    rawName = localizedMapName(assetManager,
+                                              static_cast<uint32_t>(mapId),
+                                              mapDisplayName(static_cast<uint32_t>(mapId)));
+                } else if (rawName == "Azeroth") {
+                    rawName = localizedMapName(assetManager, 0, mapDisplayName(0));
+                }
                 std::string label = rawName + "##" + std::to_string(ci);
                 if (ImGui::Button(label.c_str())) {
                     viewState.setContinentIdx(ci);
@@ -1526,7 +1549,26 @@ int continentZoneIdx(const std::vector<Zone>& zones, uint32_t mapId) {
 std::vector<std::string> WorldMapFacade::continentNames() const {
     std::vector<std::string> out;
     out.reserve(kContinentCount);
-    for (const ContinentEntry& c : kContinents) out.emplace_back(c.name);
+    bool sawDbcRow = false;
+    for (const ContinentEntry& c : kContinents) {
+        std::string name;
+        if (auto* am = impl_->assetManager; am && am->isInitialized()) {
+            if (auto dbc = am->loadDBC("Map.dbc"); dbc && dbc->isLoaded()) {
+                for (uint32_t i = 0; i < dbc->getRecordCount(); ++i) {
+                    if (dbc->getUInt32(i, 0) == c.mapId) {
+                        name = dbc->getString(i, 4);
+                        sawDbcRow = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (name.empty() && sawDbcRow) continue;
+        out.emplace_back(name.empty() ? c.name : std::move(name));
+    }
+    if (out.empty()) {
+        for (const ContinentEntry& c : kContinents) out.emplace_back(c.name);
+    }
     return out;
 }
 

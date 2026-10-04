@@ -284,33 +284,116 @@ void UIManager::loadInterfaceFont(const std::string& dataRoot,
                                               size, &cfg);
     };
 
-    const fs::path frizqt = resolve("frizqt__.ttf");
-    // Kept for any other ImGui context that wants the same face - a second
-    // window has an atlas of its own and would otherwise search for it again.
-    clientFontSize_ = kClientSize / (atlasScale > 0.0f ? atlasScale : 1.0f);
-    if (!frizqt.empty()) {
-        std::ifstream in(frizqt, std::ios::binary);
-        clientFontData_.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-    } else if (assets) {
-        clientFontData_ = assets->readFileOptional("Fonts\\FRIZQT__.TTF");
+    // FRIZQT and the other Latin faces have no Chinese glyphs, so a name, a
+    // realm or a line of chat written in Chinese drew as a row of boxes. The
+    // first face found here is merged into every face below as a fallback;
+    // merging only fills glyphs a face lacks, so Latin text is unchanged.
+    // The Chinese client's own faces first, then the system's.
+    static const char* const kCjkFaces[] = {
+        "fzlbjw.ttf", "fzxhljw.ttf", "fzxhjw.ttf", "fzbwjw.ttf", "fzjzjw.ttf"
+    };
+    if (cjkFallbackData_.empty()) {
+        auto readWhole = [](const fs::path& file) {
+            std::ifstream in(file, std::ios::binary);
+            return std::vector<uint8_t>(std::istreambuf_iterator<char>(in),
+                                        std::istreambuf_iterator<char>());
+        };
+        for (const char* name : kCjkFaces) {
+            const fs::path file = resolve(name);
+            if (!file.empty()) cjkFallbackData_ = readWhole(file);
+            if (cjkFallbackData_.empty() && assets) {
+                std::string upper(name);
+                for (char& c : upper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                cjkFallbackData_ = assets->readFileOptional("Fonts\\" + upper);
+            }
+            if (!cjkFallbackData_.empty()) break;
+        }
+        static const char* const kSystemCjk[] = {
+            "/System/Library/Fonts/Hiragino Sans GB.ttc",
+            "/System/Library/Fonts/STHeiti Medium.ttc",
+            "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+            "C:\\Windows\\Fonts\\msyh.ttc",
+            "C:\\Windows\\Fonts\\simhei.ttf",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+        };
+        for (const char* path : kSystemCjk) {
+            if (!cjkFallbackData_.empty()) break;
+            if (fs::is_regular_file(path, ec)) cjkFallbackData_ = readWhole(path);
+        }
+        if (cjkFallbackData_.empty()) {
+            LOG_WARNING("No Chinese face found - Chinese text will draw as boxes");
+        }
     }
-    if (frizqt.empty() && addFromArchive("FRIZQT__.TTF", kClientSize)) {
-        LOG_INFO("Interface font read from the archives rather than from disk");
-    } else if (!frizqt.empty()) {
+    const float cjkEmScale = cjkFallbackData_.empty()
+        ? 1.0f
+        : fontEmSizeScale(cjkFallbackData_.data(), cjkFallbackData_.size());
+    // Into the face added last, so only straight after a face was added.
+    // Persist for the life of the atlas: ImGui only stores the pointer.
+    // Latin stays on FRIZQT / Arial; FZLBJW's own Latin is a different
+    // metric and was overwriting every label (WoWee, Server, Password).
+    static const ImWchar kExcludeLatin[] = {
+        0x0000, 0x024F,
+        0,
+    };
+    auto mergeCjkFallback = [&](float size) {
+        if (cjkFallbackData_.empty()) return;
+        ImFontConfig cfg = interfaceFontConfig(cjkEmScale);
+        cfg.MergeMode = true;
+        cfg.FontDataOwnedByAtlas = false;
+        cfg.GlyphExcludeRanges = kExcludeLatin;
+        io.Fonts->AddFontFromMemoryTTF(cjkFallbackData_.data(),
+                                       static_cast<int>(cjkFallbackData_.size()),
+                                       size, &cfg);
+    };
+
+    // A Chinese client ships FZLBJW instead of a CJK-capable FRIZQT. ImGui
+    // draws with the first face, and FrameXML's fallback is also that face,
+    // so using FRIZQT here left every Chinese string on a Latin font - merge
+    // in 1.92's dynamic atlas did not fill the holes, and the glyphs that
+    // did appear were the wrong ones.
+    const fs::path frizqt = resolve("frizqt__.ttf");
+    const fs::path defaultFace = resolve("fzlbjw.ttf").empty()
+        ? frizqt
+        : resolve("fzlbjw.ttf");
+    clientFontSize_ = kClientSize / (atlasScale > 0.0f ? atlasScale : 1.0f);
+    auto readFace = [](const fs::path& file) {
+        std::ifstream in(file, std::ios::binary);
+        return std::vector<uint8_t>(std::istreambuf_iterator<char>(in),
+                                    std::istreambuf_iterator<char>());
+    };
+    if (!defaultFace.empty()) {
+        clientFontData_ = readFace(defaultFace);
+    } else if (assets) {
+        clientFontData_ = assets->readFileOptional("Fonts\\FZLBJW.TTF");
+        if (clientFontData_.empty())
+            clientFontData_ = assets->readFileOptional("Fonts\\FRIZQT__.TTF");
+    }
+    ImFont* defaultFont = nullptr;
+    if (!defaultFace.empty()) {
         ImFontConfig clientCfg =
-            interfaceFontConfig(fontEmSizeScaleOfFile(frizqt.string()));
-        if (!io.Fonts->AddFontFromFileTTF(frizqt.string().c_str(), kClientSize,
-                                          &clientCfg)) {
-            // Found and refused is a different problem from not found, and
-            // reads identically on screen.
-            LOG_WARNING("Could not read the interface font at ", frizqt.string(),
+            interfaceFontConfig(fontEmSizeScaleOfFile(defaultFace.string()));
+        defaultFont = io.Fonts->AddFontFromFileTTF(defaultFace.string().c_str(),
+                                                   kClientSize, &clientCfg);
+        if (!defaultFont) {
+            LOG_WARNING("Could not read the interface font at ", defaultFace.string(),
                         " - keeping the built-in face");
             io.Fonts->AddFontDefault();
         }
+    } else if (addFromArchive("FZLBJW.TTF", kClientSize) ||
+               addFromArchive("FRIZQT__.TTF", kClientSize)) {
+        LOG_INFO("Interface font read from the archives rather than from disk");
     } else {
-        LOG_WARNING("No frizqt__.ttf in ", fontDir.string(),
+        LOG_WARNING("No interface font in ", fontDir.string(),
                     " - keeping the built-in face");
         io.Fonts->AddFontDefault();
+    }
+    if (defaultFont && defaultFace.filename() != "frizqt__.ttf") {
+        registerInterfaceFace("frizqt__", defaultFont);
+        registerInterfaceFace(defaultFace.filename().string(), defaultFont);
+    } else if (!cjkFallbackData_.empty() && defaultFace == frizqt) {
+        mergeCjkFallback(kClientSize);
     }
 
     // The faces FrameXML's font objects name: body text in FRIZQT, headings in
@@ -337,11 +420,30 @@ void UIManager::loadInterfaceFont(const std::string& dataRoot,
             f = addFromArchive(upper.c_str(), kAtlasSize);
         }
         if (f) {
+            mergeCjkFallback(kAtlasSize);
             registerInterfaceFace(name, f);
             ++loaded;
         }
     }
-    LOG_WARNING("Interface fonts loaded: ", loaded, " of 5 from ", fontDir.string());
+
+    // The faces a Chinese client's Fonts.xml names instead: FZLBJW for body
+    // text, FZJZJW for damage, FZXHLJW for chat. Not counted with the five
+    // above - a Western client has none of them.
+    int cjkLoaded = 0;
+    for (const char* name : kCjkFaces) {
+        const fs::path file = resolve(name);
+        if (file.empty()) continue;
+        ImFontConfig faceCfg = interfaceFontConfig(fontEmSizeScaleOfFile(file.string()));
+        if (ImFont* f = io.Fonts->AddFontFromFileTTF(file.string().c_str(), kAtlasSize,
+                                                     &faceCfg)) {
+            registerInterfaceFace(name, f);
+            ++cjkLoaded;
+        } else {
+            LOG_WARNING("Could not read the interface font at ", file.string());
+        }
+    }
+    LOG_WARNING("Interface fonts loaded: ", loaded, " of 5 from ", fontDir.string(),
+                cjkLoaded > 0 ? " (+" + std::to_string(cjkLoaded) + " Chinese)" : std::string());
     if (loaded > 0) interfaceFontsLoaded_ = true;
 }
 

@@ -2762,7 +2762,12 @@ static int lua_ContainerIDToInventoryID(lua_State* L) {
 static int lua_GetBagName(lua_State* L) {
     auto* gh = getGameHandler(L);
     const int bag = static_cast<int>(luaL_optnumber(L, 1, 0));
-    if (bag == 0) { lua_pushstring(L, "Backpack"); return 1; }
+    if (bag == 0) {
+        // The interface's own word for it - 行囊 on a zhCN client.
+        lua_getglobal(L, "BACKPACK_TOOLTIP");
+        if (!lua_isstring(L, -1)) { lua_pop(L, 1); lua_pushstring(L, "Backpack"); }
+        return 1;
+    }
     if (!gh || bag < 1 || bag > 4) { return luaReturnNil(L); }
     // An empty bag slot has no size, which is how the interface knows not to
     // draw a bag there at all.

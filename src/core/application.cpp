@@ -475,6 +475,24 @@ bool Application::initialize() {
             uiManager->loadInterfaceFont(dataPath, assetManager.get());
         }
 
+        // The locale the data is in, for the logon challenge - a server picks
+        // the language of its item, quest and creature text from it - and for
+        // GetLocale(), which FrameXML and addons branch on. A Chinese client's
+        // DBCs carry their strings in the zhCN column; see promoteLocaleStrings.
+        if (expansionRegistry_) {
+            if (const auto* profile = expansionRegistry_->getActive()) {
+                auto races = assetManager->loadDBC("ChrRaces.dbc");
+                const int idx = (races && races->isLoaded()) ? races->localeIndex() : -1;
+                static const char* const kLocales[] = {
+                    "enUS", "koKR", "frFR", "deDE", "zhCN", "zhTW", "esES", "esMX", "ruRU"
+                };
+                if (idx > 0 && idx < static_cast<int>(std::size(kLocales))) {
+                    expansionRegistry_->setDataLocale(profile->id, kLocales[idx]);
+                    LOG_WARNING("Client data is ", kLocales[idx], " - using it as the locale");
+                }
+            }
+        }
+
         // Renderer creation precedes AssetManager creation, so DBC-driven
         // lighting must be initialized here rather than in Renderer::initialize.
         if (renderer && renderer->getLightingManager() &&
@@ -4911,7 +4929,20 @@ void Application::render() {
         // Let the interface settle first: ImGui sizes much of its layout from
         // what it measured last frame, and hides a window outright for its
         // first frame or two while it fits itself.
-        if (++screenshotFrames_ == kScreenshotFrame) {
+        // WOWEE_SCREENSHOT_EVERY=<frames> keeps running and rewrites the
+        // picture that often, for watching a session with no screen
+        // recording permission to look at the window with.
+        static const int every = [] {
+            const char* v = std::getenv("WOWEE_SCREENSHOT_EVERY");
+            return v ? std::max(0, std::atoi(v)) : 0;
+        }();
+        ++screenshotFrames_;
+        if (every > 0) {
+            if (screenshotFrames_ >= kScreenshotFrame &&
+                (screenshotFrames_ - kScreenshotFrame) % every == 0) {
+                renderer->captureScreenshot(shot);
+            }
+        } else if (screenshotFrames_ == kScreenshotFrame) {
             renderer->captureScreenshot(shot);
             running = false;
         }

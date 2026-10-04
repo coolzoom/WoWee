@@ -28,6 +28,7 @@ struct ExpansionProfile {
     std::string platform = "x86";
     std::string os = "Win";
     std::string locale = "enUS";
+    bool localeFromProfile = false;  // expansion.json named one; the data does not override it
     uint32_t timezone = 0;
     std::string dataPath;      // Absolute path to expansion data dir
     uint32_t maxLevel = 60;
@@ -71,6 +72,10 @@ public:
 
     /** Convenience: active expansion id. Empty if none. */
     [[nodiscard]] const std::string& getActiveId() const { return activeId_; }
+
+    /// The locale the extracted data turned out to be in - a zhCN client's
+    /// DBCs say so - unless the profile names one itself.
+    void setDataLocale(const std::string& id, const std::string& locale);
 
 private:
     std::vector<ExpansionProfile> profiles_;

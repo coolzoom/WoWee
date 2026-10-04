@@ -272,6 +272,25 @@ void SRP::computeProofs(const std::string& username) {
 
     M2 = Crypto::sha1(M2_input);
 
+    // One login in a hundred and twenty-eight was refused with "server identity
+    // verification failed" by vmangos and its relatives, after the server had
+    // accepted M1: it reads M1 and K back into big numbers before hashing them
+    // for M2, and a little-endian number ends at its last non-zero byte.
+    auto trimmed = [](std::vector<uint8_t> v) {
+        while (!v.empty() && v.back() == 0) v.pop_back();
+        return v;
+    };
+    const std::vector<uint8_t> M1t = trimmed(M1);
+    const std::vector<uint8_t> Kt = trimmed(K);
+    M2Trimmed.clear();
+    if (M1t.size() != M1.size() || Kt.size() != K.size()) {
+        std::vector<uint8_t> in;
+        in.insert(in.end(), A_bytes.begin(), A_bytes.end());
+        in.insert(in.end(), M1t.begin(), M1t.end());
+        in.insert(in.end(), Kt.begin(), Kt.end());
+        M2Trimmed = Crypto::sha1(in);
+    }
+
     LOG_DEBUG("Expected server proof M2 calculated (", M2.size(), " bytes)");
 }
 
@@ -301,6 +320,9 @@ bool SRP::verifyServerProof(const std::vector<uint8_t>& serverM2) const {
     }
 
     bool match = std::equal(M2.begin(), M2.end(), serverM2.begin());
+    if (!match && M2Trimmed.size() == serverM2.size()) {
+        match = std::equal(M2Trimmed.begin(), M2Trimmed.end(), serverM2.begin());
+    }
 
     if (match) {
         LOG_INFO("Server proof verified successfully!");

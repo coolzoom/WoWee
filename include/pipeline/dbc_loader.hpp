@@ -119,7 +119,18 @@ public:
      */
     int32_t findRecordById(uint32_t id) const;
 
+    /// Which locale column a non-English client filled (4 is zhCN), or -1 if
+    /// the file holds English strings or none at all.
+    int localeIndex() const { return localeIndex_; }
+
+    /// The enUS field of the first localized string block moved, or -1. In a
+    /// table whose first string is its name - ChrRaces, ChrClasses - that is
+    /// the name, wherever this expansion's layout puts it.
+    int firstLocaleField() const { return firstLocaleField_; }
+
 private:
+    int localeIndex_ = -1;
+    int firstLocaleField_ = -1;
     // DBC file header (20 bytes)
     struct DBCHeader {
         char magic[4];              // 'WDBC'
@@ -143,6 +154,10 @@ private:
     mutable bool idCacheBuilt = false;
 
     void buildIdCache() const;
+
+    /// Copy a non-English client's strings into the enUS slot of each
+    /// localized string block, which every reader in this client asks for.
+    void promoteLocaleStrings();
 
     /**
      * Load from CSV text format (produced by dbc_to_csv tool).

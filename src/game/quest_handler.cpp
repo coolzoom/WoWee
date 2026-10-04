@@ -183,7 +183,8 @@ static bool isStrongQuestTitle(const std::string& s) {
     if (!isReadableQuestText(s, 6, 72)) return false;
     if (looksLikeQuestDescriptionText(s)) return false;
     unsigned char first = static_cast<unsigned char>(s.front());
-    return std::isupper(first) != 0;
+    // zhCN titles have no case; the first byte is a UTF-8 lead.
+    return std::isupper(first) != 0 || first >= 0xC0;
 }
 
 static int scoreQuestTitle(const std::string& s) {
@@ -192,7 +193,7 @@ static int scoreQuestTitle(const std::string& s) {
     int score = 0;
     score += static_cast<int>(std::min<size_t>(s.size(), 32));
     unsigned char first = static_cast<unsigned char>(s.front());
-    if (std::isupper(first)) score += 20;
+    if (std::isupper(first) || first >= 0xC0) score += 20;
     if (std::islower(first)) score -= 20;
     if (s.find(' ') != std::string::npos) score += 8;
     if (s.find('.') != std::string::npos) score -= 18;
@@ -1169,8 +1170,16 @@ void QuestHandler::registerOpcodes(DispatchTable& table) {
                 parsedLongEnough &&
                 notShorterThanExisting &&
                 (isPlaceholderQuestTitle(q.title) || q.title.empty() || parsed.score >= existingScore + 12);
+            // A placeholder is worse than any readable title. The strong-title
+            // test wants an ASCII capital and six bytes, which a short zhCN
+            // name fails, so "Quest #5261" stayed on screen next to a Chinese
+            // description of the same quest.
+            const bool replacePlaceholder =
+                (isPlaceholderQuestTitle(q.title) || q.title.empty()) &&
+                !parsed.title.empty() &&
+                isReadableQuestText(parsed.title, 2, 72);
 
-            if (shouldReplaceTitle && !parsed.title.empty()) {
+            if ((shouldReplaceTitle || replacePlaceholder) && !parsed.title.empty()) {
                 q.title = parsed.title;
             }
             if (!parsed.objectives.empty() &&

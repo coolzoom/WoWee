@@ -48,3 +48,11 @@ TEST_CASE("a localized line is text", "[quest][text]") {
     // that is asked for, which "Rückkehr" has.
     CHECK(questTextIsReadable("R\xc3\xbc""ckkehr zu Marschall Dughan.", 8, 600));
 }
+
+TEST_CASE("a Chinese title is text", "[quest][text]") {
+    // A zhCN query has no Latin letters. Asking for one left every title as
+    // "Quest #id" and dropped the description beside it.
+    CHECK(questTextIsReadable("清剿狗头人营地", 6, 72));
+    CHECK(questTextIsReadable("返回闪金镇，向治安官杜汉复命。", 8, 600));
+    CHECK_FALSE(questTextIsReadable("········", 8, 600));
+}

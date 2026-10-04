@@ -123,7 +123,78 @@ bool DBCFile::load(const std::vector<uint8_t>& dbcData) {
     idCacheBuilt = false;
     idToIndexCache.clear();
 
+    promoteLocaleStrings();
+
     return true;
+}
+
+// A localized string is a block of one string column per locale - eight in
+// 1.12, sixteen from 2.x - and a client fills only its own: a zhCN client has
+// every name four columns past enUS and the enUS column empty. Everything here
+// reads the enUS column, so on such a client every race, area and spell name
+// came out empty. A block is recognised by its shape - the enUS column and all
+// but one of the others zero in every record, the one left holding offsets to
+// the start of strings - and that column is copied into the enUS slot.
+void DBCFile::promoteLocaleStrings() {
+    localeIndex_ = -1;
+    firstLocaleField_ = -1;
+    if (recordCount == 0 || stringBlockSize < 2 || recordSize < fieldCount * 4) return;
+
+    auto field = [&](uint32_t rec, uint32_t f) {
+        uint32_t v;
+        std::memcpy(&v, recordData.data() + static_cast<size_t>(rec) * recordSize + f * 4, 4);
+        return v;
+    };
+    auto isStringStart = [&](uint32_t v) {
+        return v < stringBlockSize && (v == 0 || stringBlock[v - 1] == 0);
+    };
+
+    // Sixteen first: an eight-wide window fits inside a sixteen-wide block.
+    // The field after the strings is the block's locale mask, never zero in
+    // every record; requiring it keeps a window one field early - zero enUS
+    // column, the string column one further in - from matching instead.
+    int promoted = 0;
+    std::vector<bool> covered(fieldCount, false);
+    for (uint32_t locales : {16u, 8u}) {
+        for (uint32_t f = 0; f + locales < fieldCount; ++f) {
+            bool overlaps = false;
+            for (uint32_t k = 0; k <= locales; ++k) overlaps = overlaps || covered[f + k];
+            if (overlaps) continue;
+            bool hasMask = false;
+            for (uint32_t r = 0; r < recordCount && !hasMask; ++r) hasMask = field(r, f + locales) != 0;
+            if (!hasMask) continue;
+            int filled = -1;
+            bool shape = true;
+            for (uint32_t k = 0; k < locales && shape; ++k) {
+                bool anyNonZero = false;
+                for (uint32_t r = 0; r < recordCount; ++r) {
+                    const uint32_t v = field(r, f + k);
+                    if (v == 0) continue;
+                    anyNonZero = true;
+                    if (k == 0 || !isStringStart(v)) { shape = false; break; }
+                }
+                if (!shape || !anyNonZero) continue;
+                if (filled != -1) shape = false;
+                else filled = static_cast<int>(k);
+            }
+            if (!shape || filled <= 0) continue;
+
+            for (uint32_t r = 0; r < recordCount; ++r) {
+                const uint32_t v = field(r, f + static_cast<uint32_t>(filled));
+                std::memcpy(recordData.data() + static_cast<size_t>(r) * recordSize + f * 4, &v, 4);
+            }
+            for (uint32_t k = 0; k <= locales; ++k) covered[f + k] = true;
+            localeIndex_ = filled;
+            if (firstLocaleField_ < 0 || static_cast<int>(f) < firstLocaleField_) {
+                firstLocaleField_ = static_cast<int>(f);
+            }
+            ++promoted;
+            f += locales;
+        }
+    }
+    if (promoted > 0) {
+        LOG_DEBUG("DBC: ", promoted, " localized string block(s) moved into the enUS column");
+    }
 }
 
 const uint8_t* DBCFile::getRecord(uint32_t index) const {
